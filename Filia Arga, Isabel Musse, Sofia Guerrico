@@ -1,0 +1,299 @@
+**********************************************
+* Applied Microeconometrics
+* PS1
+* Filia Arga, Isabel Musse, Sofia Guerrico
+**********************************************
+
+local foldersave "/Users/Bel/Google Drive/PhD/Microeconometrics/Problem_sets"
+local date 20160203
+
+cd "`foldersave'"
+
+log using log_PS1_`date'.smcl, replace
+
+set more off
+
+*********
+* Q1 *
+*********
+
+* Set the problem
+
+clear
+
+set seed 1234 
+
+set obs 100
+
+gen eta = rnormal(0,1) 
+gen D_star = rnormal(0,1) 
+gen D = (D_star>0)
+
+gen clusterid=_n
+
+expand 100
+
+gen epsilon = rnormal(0,1)
+
+gen D_eta = D*eta
+
+gen Y = D + eta + D_eta + epsilon
+
+* 1.A
+
+reg Y D
+
+* 1.B
+
+reg Y D, rob
+
+* 1.C
+
+reg Y D, cluster(clusterid)
+
+* 1.E
+
+collapse Y D, by(clusterid)
+
+reg Y D
+
+* 1.F
+
+reg Y D, vce(rob)
+	reg Y D, cluster(clusterid)
+
+reg Y D, vce(hc2)
+reg Y D, vce(hc3)
+
+
+* 1.G
+
+clear
+program drop _all
+
+program define dgp, rclass
+
+	clear
+
+	set obs 100
+	
+	gen eta = rnormal(0,1) 
+	gen D_star = rnormal(0,1) 
+	gen D = (D_star>0)
+	
+	gen clusterid=_n
+	
+	expand 100
+	
+	gen epsilon = rnormal(0,1)
+	
+	gen D_eta = D*eta
+	
+	gen Y = D + eta + D_eta + epsilon
+
+	reg Y D
+	test D=1
+	return scalar reject1=r(p)<.05
+	
+	reg Y D, cluster(clusterid)
+	test D=1
+	return scalar reject2=r(p)<.05
+	
+	collapse Y D, by(clusterid)
+	
+	reg Y D
+	test D=1
+	return scalar reject3=r(p)<.05
+	
+	reg Y D, vce(rob)
+	test D=1
+	return scalar reject4=r(p)<.05
+	
+	reg Y D, vce(hc2)
+	test D=1
+	return scalar reject5=r(p)<.05
+	
+
+end
+
+simulate reject1=r(reject1) reject2=r(reject2) reject3=r(reject3) ///
+reject4=r(reject4) reject5=r(reject5), ///
+reps(1000) seed(1234): dgp
+
+sum
+
+*********
+* Q2 *
+*********
+
+clear
+*import excel using PSET1-2016, firstrow
+*save PSET1-2016, replace
+
+use PSET1-2016
+
+drop if treat_real==. 
+	* We are dropping for these people because it is not clear why they are in the database (and it affects the propensity score)
+	
+label var age "age of the registered voter"
+label var female "indicator for whether the registered voter is female"
+label var vote00 "indicator for whether the registered voter voted in 2000"
+label var vote98 "indicator for whether the registered voter voted in 1998"
+label var persons "household size"
+label var newreg "indicator for whether the person is a newly registered voter"
+
+local control_vars age female vote00 vote98 persons newreg
+
+* 2.A
+
+tabstat `control_vars', by(treat_real) stat(mean sd)
+
+foreach var of varlist `control_vars' {
+	di "`var'
+	ttest `var', by(treat_real)
+} 
+
+logit treat_real `control_vars'
+
+	* look at the f-test to know if controls predict the assignment
+	
+* 2.B.i
+
+reg vote02 contact `control_vars', rob
+outreg2 using ps1_2b_`date'.xls, sortvar(contact) dec(3) se bracket ctitle("2bi") replace
+	* beta = 0.0423
+
+* 2.B.ii
+
+ivreg2 vote02 (contact=treat) `control_vars', rob first
+	* F(1,83662) = 10804, p-value=0.00 -> strong 1st stage
+		*1st stage = .4633
+	
+	* wald =  0.01202/.4633 = .02594431
+	
+	reg vote02 treat_real `control_vars', rob
+	outreg2 using ps1_2b_`date'.xls, sortvar(contact) dec(3) se bracket ctitle("2bii - iv 1st stage") append
+		*beta = .01202
+		
+	reg contact treat_real `control_vars', rob
+	
+		*beta = .4633
+
+* 2.B.iii
+
+ivreg2 vote02 (treat_real=contact) `control_vars', rob
+outreg2 using ps1_2b_`date'.xls, sortvar(contact) dec(3) se bracket ctitle("2biii - iv 2nd stage") append
+	*2nd stage = .0259
+	
+	*Control Function
+reg contact treat_real `control_vars', rob
+outreg2 using ps1_2b_`date'.xls, sortvar(contact) dec(3) se bracket ctitle("control function - step 1") append
+
+predict contact_hat
+gen residuals_1ststage = contact - contact_hat
+
+reg vote02 contact residuals_1ststage `control_vars', rob
+outreg2 using ps1_2b_`date'.xls, sortvar(contact) dec(3) se bracket ctitle("control function - step 2") append
+	*Control function effect = .0259
+
+* 2.C
+
+reg vote02 contact,rob
+outreg2 using ps1_2c_`date'.xls, sortvar(contact) dec(3) se bracket replace
+	* beta = .0812
+
+reg vote02 contact `control_vars', rob
+outreg2 using ps1_2c_`date'.xls, sortvar(contact `control_vars') dec(3) se bracket append
+	* beta = .0423
+	* Smaller when controls are added
+
+xi: reg vote02 contact##c.age contact##female contact##vote00 ///
+ 	contact##vote98 contact##c.persons contact##newreg,rob
+outreg2 using ps1_2c_`date'.xls, sortvar(contact `control_vars') dec(3) se bracket append
+ 	* beta = .0633
+
+ 
+* 2.D.i
+probit contact `control_vars'
+predict contact_prob
+
+* 2.D.ii
+
+kdensity contact_prob, kernel(epanechnikov)  /* omitted bwidth = optimal */
+
+kdensity contact_prob, kernel(epanechnikov) bwidth(0.05) 
+
+kdensity contact_prob, kernel(triangle) 
+
+twoway (kdensity contact_prob if contact==1, kernel(epanechnikov)) (kdensity contact_prob if contact==0, kernel(epanechnikov))
+
+twoway (kdensity contact_prob if contact==1, kernel(epanechnikov) bwidth(0.05)) (kdensity contact_prob if contact==0, kernel(epanechnikov) bwidth(0.05))
+
+* 2.D.iii
+
+reg vote02 contact [pw= contact_prob]
+	* beta = .0704
+
+*ToT
+egen tot_1_mean =  mean(vote02) if contact==1 
+
+gen tot_2 =  vote02* contact_prob/(1-contact_prob) if contact==0
+egen tot_2_sum = total(tot_2), missing 
+
+gen tot_3 = contact_prob/(1-contact_prob) if contact==0 
+egen tot_3_sum = total(tot_3), missing 
+
+gen beta = tot_1_mean - (tot_2_sum/tot_3_sum)
+
+	tab beta
+		* beta = .0331 
+	
+* 2.D.iv
+
+gen lambda = contact + (1 - contact)*contact_prob/(1-contact_prob)
+
+reg vote02 contact [pw= lambda]
+	* beta = .0426
+	
+gen aux_1 = (vote02*(contact - contact_prob) / (1 - contact_prob))
+egen aux_1_mean =  mean(aux_1)
+egen aux_2_mean =  mean(contact)
+gen aux3 = aux_1_mean / aux_2_mean
+	*TOT (ATET) = .0431 -> from Cameron, Trivedi (p. 901)
+
+	
+* 2.D.v
+	* ? 
+
+* 2.D.vi
+local control_vars age female vote00 vote98 persons newreg
+
+pscore contact `control_vars', pscore(contact_prob2) blockid(blockid)
+	* This new variable contact_prob2 is just the predict of the probit = our propensity score (contact_prob) 
+
+*Nearest-neighbor matching	
+attnd vote02 contact, pscore(contact_prob) comsup
+	* beat = .042
+
+*Stratification
+atts vote02 contact,  pscore(contact_prob) blockid(blockid) comsup
+	* beta = .044
+
+*Kernel
+attk vote02 contact, pscore(contact_prob) comsup 
+	* beta = .072
+		
+*Radius
+attr vote02 contact, pscore(contact_prob) comsup 
+
+
+log close	
+
+
+ 
+	
+
+
+
+
+
